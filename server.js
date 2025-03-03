@@ -1,8 +1,17 @@
 const express = require('express'); 
+const axios = require('axios');
+const mariadb = require("mariadb"); 
+const { body, param, validationResult } = require('express-validator');
+const sanitizeHtml = require('sanitize-html');
+const swaggerJsdoc = require('swagger-jsdoc');
+const swaggerUi = require('swagger-ui-express');
+
 const app = express(); 
 const port = 3000;
 
-const mariadb = require("mariadb"); 
+app.use(express.json());
+
+// Database Connection Pool
 const pool = mariadb.createPool({
    host: 'localhost', 
    user: 'root', 
@@ -11,13 +20,6 @@ const pool = mariadb.createPool({
    port: 3306, 
    connectionLimit: 5 
 });
-
-const { body, param, validationResult } = require('express-validator');
-const sanitizeHtml = require('sanitize-html');
-const swaggerJsdoc = require('swagger-jsdoc');
-const swaggerUi = require('swagger-ui-express');
-
-app.use(express.json());
 
 // Swagger setup
 const swaggerOptions = {
@@ -73,7 +75,14 @@ app.get('/students', async (req, res) => {
  *       404:
  *         description: Student not found
  */
-app.get('/students/:id', async (req, res) => {
+app.get('/students/:id', [
+    param('id').isInt().withMessage('Student ID must be an integer')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
     try {
         const conn = await pool.getConnection();
         const rows = await conn.query("SELECT * FROM students WHERE id = ?", [req.params.id]);
@@ -106,11 +115,22 @@ app.get('/students/:id', async (req, res) => {
  *       201:
  *         description: Student created successfully
  */
-app.post('/students', async (req, res) => {
+app.post('/students', [
+    body('name').isString().notEmpty().withMessage('Name is required'),
+    body('email').isEmail().withMessage('Invalid email'),
+    body('age').isInt().withMessage('Age must be an integer')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
     try {
         const { name, email, age } = req.body;
+        const sanitizedEmail = sanitizeHtml(email);
         const conn = await pool.getConnection();
-        const result = await conn.query("INSERT INTO students (name, email, age) VALUES (?, ?, ?)", [sanitizeHtml(name), email, age]);
+        const result = await conn.query("INSERT INTO students (name, email, age) VALUES (?, ?, ?)", 
+                                        [sanitizeHtml(name), sanitizedEmail, age]);
         conn.release();
         res.status(201).json({ message: "Student added successfully", studentId: result.insertId });
     } catch (err) {
@@ -143,11 +163,20 @@ app.post('/students', async (req, res) => {
  *       200:
  *         description: Student updated successfully
  */
-app.patch('/students/:id', async (req, res) => {
+app.patch('/students/:id', [
+    param('id').isInt().withMessage('Student ID must be an integer'),
+    body('email').isEmail().withMessage('Invalid email')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
     try {
         const { email } = req.body;
+        const sanitizedEmail = sanitizeHtml(email);
         const conn = await pool.getConnection();
-        const result = await conn.query("UPDATE students SET email = ? WHERE id = ?", [email, req.params.id]);
+        await conn.query("UPDATE students SET email = ? WHERE id = ?", [sanitizedEmail, req.params.id]);
         conn.release();
         res.json({ message: "Student email updated successfully" });
     } catch (err) {
@@ -171,10 +200,17 @@ app.patch('/students/:id', async (req, res) => {
  *       200:
  *         description: Student deleted successfully
  */
-app.delete('/students/:id', async (req, res) => {
+app.delete('/students/:id', [
+    param('id').isInt().withMessage('Student ID must be an integer')
+], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
     try {
         const conn = await pool.getConnection();
-        const result = await conn.query("DELETE FROM students WHERE id = ?", [req.params.id]);
+        await conn.query("DELETE FROM students WHERE id = ?", [req.params.id]);
         conn.release();
         res.json({ message: "Student deleted successfully" });
     } catch (err) {
@@ -182,7 +218,19 @@ app.delete('/students/:id', async (req, res) => {
     }
 });
 
+app.get('/say', async (req, res) => {
+    try {
+        const keyword = req.query.keyword || "nothing";
+        const azureFunctionUrl = `https://shashankhfunction123.azurewebsites.net/api/Function?keyword=${keyword}`;
+        const response = await axios.get(azureFunctionUrl);
+        res.json(response.data);
+    } catch (error) {
+        res.status(500).json({ error: "Error calling Azure Function" });
+    }
+});
+
+// Start the server
 app.listen(port, () => {
-    console.log('Server running at http://localhost:${port}');
-    console.log('Swagger Docs available at http://localhost:${port}/api-docs');
+    console.log(`Server running at http://localhost:${port}`);
+    console.log(`Swagger Docs available at http://localhost:${port}/api-docs`);
 });
